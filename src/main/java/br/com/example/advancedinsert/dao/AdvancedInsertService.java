@@ -6,6 +6,7 @@ import br.com.example.advancedinsert.dao.entity.LargeTable;
 
 import java.sql.Connection;
 import java.sql.Date;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -42,31 +43,79 @@ public class AdvancedInsertService {
     }
 
     public void insertIntoMySQL(final List<LargeTable> largeTables) {
-        try (var connection = MySQLConnection.getConnection()) {
-            insert(largeTables, connection);
+        try {
+            insert(largeTables);
         } catch (SQLException e) {
             throw new RuntimeException(e);
         }
     }
 
-    private static void insert(final List<LargeTable> largeTables, final Connection connection) throws SQLException {
-        var preparedStatement = connection.prepareStatement("INSERT INTO large_table (id, date) VALUES (?, ?)");
+    private static void insert(final List<LargeTable> largeTables) throws SQLException {
+        int numberOfProcessorsAvailable = getRoundedProcessorsAvailable(largeTables);
 
+        final int numberOfListPerThread = largeTables.size() / numberOfProcessorsAvailable;
+
+        final List<List<LargeTable>> slicedList = new ArrayList<>();
+
+        int startIndex = 0;
+        int finalIndex = numberOfListPerThread;
+
+        for (int i = 0; i < numberOfProcessorsAvailable; i++) {
+            final List<LargeTable> sliced = largeTables.subList(startIndex, finalIndex);
+            slicedList.add(sliced);
+            startIndex += numberOfListPerThread;
+            finalIndex += numberOfListPerThread;
+        }
+
+        for (int i = 0; i < slicedList.size(); i++) {
+            final int index = i;
+            Thread thread = new Thread(() -> prepareRunnable(slicedList.get(index)));
+            thread.start();
+        }
+    }
+
+    private static int getRoundedProcessorsAvailable(final List<?> list) {
+        var numberOfProcessorsAvailable = Runtime.getRuntime().availableProcessors();
+
+        while (list.size() % numberOfProcessorsAvailable != 0) {
+            --numberOfProcessorsAvailable;
+        }
+
+        return numberOfProcessorsAvailable;
+    }
+
+    private static void prepareRunnable(final List<LargeTable> largeTables) {
+        try (final var connection = MySQLConnection.getConnection()) {
+            prepare(largeTables, connection);
+        } catch (final SQLException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private static void prepare(final List<LargeTable> largeTables,
+                                final Connection connection) throws SQLException {
+        var preparedStatement = connection.prepareStatement("INSERT INTO large_table (id, date) VALUES (?, ?)");
         connection.setAutoCommit(false);
 
         int count = 0;
 
         for (final LargeTable aLargeTable : largeTables) {
-            preparedStatement.setString(1, aLargeTable.id().toString());
-            preparedStatement.setDate(2, Date.valueOf(LocalDate.from(aLargeTable.date())));
-            preparedStatement.addBatch();
-
-            if (++count % 1000 == 0) {
-                preparedStatement.executeBatch();
-            }
+            execute(aLargeTable, preparedStatement, count);
         }
 
         preparedStatement.executeBatch();
         connection.commit();
+    }
+
+    private static void execute(final LargeTable aLargeTable,
+                                final PreparedStatement preparedStatement,
+                                int count) throws SQLException {
+        preparedStatement.setString(1, aLargeTable.id().toString());
+        preparedStatement.setDate(2, Date.valueOf(LocalDate.from(aLargeTable.date())));
+        preparedStatement.addBatch();
+
+        if (++count % 1000 == 0) {
+            preparedStatement.executeBatch();
+        }
     }
 }
