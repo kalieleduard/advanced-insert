@@ -1,5 +1,6 @@
 package br.com.example.advancedinsert.dao;
 
+import br.com.example.advancedinsert.ListUtils;
 import br.com.example.advancedinsert.dao.connections.MySQLConnection;
 import br.com.example.advancedinsert.dao.connections.PostgresConnection;
 import br.com.example.advancedinsert.dao.entity.LargeTable;
@@ -61,7 +62,7 @@ public class AdvancedInsertService {
 
     private static void insert(final List<LargeTable> largeTables) throws SQLException {
         final int numberOfProcessorsAvailable = Runtime.getRuntime().availableProcessors();
-        final List<List<LargeTable>> partitions = partitionList(largeTables, numberOfProcessorsAvailable);
+        final List<List<LargeTable>> partitions = ListUtils.partitionList(largeTables, numberOfProcessorsAvailable);
 
         try (final var executorService = Executors.newFixedThreadPool(numberOfProcessorsAvailable)) {
             List<Callable<Void>> tasks = new ArrayList<>();
@@ -73,46 +74,15 @@ public class AdvancedInsertService {
                 });
             }
 
-            List<Future<Void>> futures = executorService.invokeAll(tasks);
+            final List<Future<Void>> futures = executorService.invokeAll(tasks);
 
             for (final Future<Void> f : futures) {
-                try {
-                    f.get();
-                } catch (ExecutionException e) {
-                    LOGGER.severe("SQL Exception occurred: " + e.getMessage());
-                    throw new RuntimeException("Error while inserting data: ", e.getCause());
-                }
+                validateErrors(f);
             }
         } catch (InterruptedException e) {
             LOGGER.severe("SQL Exception occurred: " + e.getMessage());
             throw new RuntimeException(e);
         }
-    }
-
-    private static List<List<LargeTable>> partitionList(final List<LargeTable> largeTables,
-                                                        final int partitions) {
-        final List<List<LargeTable>> result = new ArrayList<>();
-        int totalSize = largeTables.size();
-        int baseSize = totalSize / partitions;
-        int remainder = totalSize % partitions;
-
-        int start = 0;
-        for (int i = 0; i < partitions; i++) {
-            int chunkSize = baseSize + (remainder > 0 ? 1 : 0);
-            remainder = Math.max(0, remainder - 1);
-
-            int end = start + chunkSize;
-            end = Math.min(end, totalSize);
-
-            if (start >= end) {
-                break;
-            }
-
-            result.add(largeTables.subList(start, end));
-            start = end;
-        }
-
-        return result;
     }
 
     private static void prepareRunnable(final List<LargeTable> largeTables) {
@@ -149,6 +119,15 @@ public class AdvancedInsertService {
 
         if (count % CONFIGURED_BATCH_SIZE == 0) {
             preparedStatement.executeBatch();
+        }
+    }
+
+    private static void validateErrors(final Future<Void> future) throws InterruptedException {
+        try {
+            future.get();
+        } catch (ExecutionException e) {
+            LOGGER.severe("SQL Exception occurred: " + e.getMessage());
+            throw new RuntimeException("Error while inserting data: ", e.getCause());
         }
     }
 }
