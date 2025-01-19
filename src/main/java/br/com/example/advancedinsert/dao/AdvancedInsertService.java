@@ -14,6 +14,7 @@ import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.Executors;
 
 public class AdvancedInsertService {
 
@@ -55,23 +56,22 @@ public class AdvancedInsertService {
 
         final int numberOfListPerThread = largeTables.size() / numberOfProcessorsAvailable;
 
-        final List<List<LargeTable>> slicedList = new ArrayList<>();
-
         int startIndex = 0;
         int finalIndex = numberOfListPerThread;
 
+        final List<Runnable> runners = new ArrayList<>();
+
         for (int i = 0; i < numberOfProcessorsAvailable; i++) {
             final List<LargeTable> sliced = largeTables.subList(startIndex, finalIndex);
-            slicedList.add(sliced);
+            runners.add(() -> prepareRunnable(sliced));
             startIndex += numberOfListPerThread;
             finalIndex += numberOfListPerThread;
         }
 
-        for (int i = 0; i < slicedList.size(); i++) {
-            final int index = i;
-            Thread thread = new Thread(() -> prepareRunnable(slicedList.get(index)));
-            thread.start();
-        }
+        final var executorService = Executors.newFixedThreadPool(numberOfProcessorsAvailable);
+        runners.forEach(executorService::execute);
+
+        executorService.shutdown();
     }
 
     private static int getRoundedProcessorsAvailable(final List<?> list) {
