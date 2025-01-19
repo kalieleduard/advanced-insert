@@ -27,6 +27,8 @@ public class AdvancedInsertService {
     public static final int CONFIGURED_BATCH_SIZE = 1000;
 
     public List<LargeTable> searchAll() {
+        final List<LargeTable> response = new ArrayList<>();
+
         final var query = """
                 SELECT id, date FROM large_table
                 """;
@@ -36,19 +38,16 @@ public class AdvancedInsertService {
             final ResultSet rs;
             rs = preparedStatement.executeQuery();
 
-            final List<LargeTable> response = new ArrayList<>();
-
             while (rs.next()) {
                 final var id = (UUID) rs.getObject("id");
                 final var date = rs.getDate("date");
                 response.add(new LargeTable(id, date.toLocalDate()));
             }
-
-            return response;
         } catch (final SQLException e) {
             LOGGER.severe("SQL Exception occurred: " + e.getMessage());
-            throw new RuntimeException(e);
         }
+
+        return response;
     }
 
     public void insertIntoMySQL(final List<LargeTable> largeTables) {
@@ -56,7 +55,6 @@ public class AdvancedInsertService {
             insert(largeTables);
         } catch (SQLException e) {
             LOGGER.severe("SQL Exception occurred: " + e.getMessage());
-            throw new RuntimeException(e);
         }
     }
 
@@ -81,7 +79,6 @@ public class AdvancedInsertService {
             }
         } catch (InterruptedException e) {
             LOGGER.severe("SQL Exception occurred: " + e.getMessage());
-            throw new RuntimeException(e);
         }
     }
 
@@ -90,7 +87,6 @@ public class AdvancedInsertService {
             prepare(largeTables, connection);
         } catch (final SQLException e) {
             LOGGER.severe("SQL Exception occurred: " + e.getMessage());
-            throw new RuntimeException(e);
         }
     }
 
@@ -126,8 +122,7 @@ public class AdvancedInsertService {
         try {
             future.get();
         } catch (ExecutionException e) {
-            LOGGER.severe("SQL Exception occurred: " + e.getMessage());
-            throw new RuntimeException("Error while inserting data: ", e.getCause());
+            LOGGER.severe("Error while fetching process: " + e.getMessage());
         }
     }
 }
