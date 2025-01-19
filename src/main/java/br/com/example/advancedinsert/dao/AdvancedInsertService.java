@@ -9,14 +9,21 @@ import java.sql.Date;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Statement;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.logging.Logger;
 
 public class AdvancedInsertService {
+
+    private static final Logger LOGGER = Logger.getLogger(AdvancedInsertService.class.getName());
+
+    public static final int CONFIGURED_BATCH_SIZE = 1000;
 
     public List<LargeTable> searchAll() {
         final var query = """
@@ -24,10 +31,9 @@ public class AdvancedInsertService {
                 """;
 
         try (final var connection = PostgresConnection.getConnection()) {
-            final Statement statement;
+            final PreparedStatement preparedStatement = connection.prepareStatement(query);
             final ResultSet rs;
-            statement = connection.createStatement();
-            rs = statement.executeQuery(query);
+            rs = preparedStatement.executeQuery();
 
             final List<LargeTable> response = new ArrayList<>();
 
@@ -38,7 +44,8 @@ public class AdvancedInsertService {
             }
 
             return response;
-        } catch (SQLException e) {
+        } catch (final SQLException e) {
+            LOGGER.severe("SQL Exception occurred: " + e.getMessage());
             throw new RuntimeException(e);
         }
     }
@@ -47,47 +54,72 @@ public class AdvancedInsertService {
         try {
             insert(largeTables);
         } catch (SQLException e) {
+            LOGGER.severe("SQL Exception occurred: " + e.getMessage());
             throw new RuntimeException(e);
         }
     }
 
     private static void insert(final List<LargeTable> largeTables) throws SQLException {
-        int numberOfProcessorsAvailable = getRoundedProcessorsAvailable(largeTables);
+        final int numberOfProcessorsAvailable = Runtime.getRuntime().availableProcessors();
+        final List<List<LargeTable>> partitions = partitionList(largeTables, numberOfProcessorsAvailable);
 
-        final int numberOfListPerThread = largeTables.size() / numberOfProcessorsAvailable;
+        try (final var executorService = Executors.newFixedThreadPool(numberOfProcessorsAvailable)) {
+            List<Callable<Void>> tasks = new ArrayList<>();
 
-        int startIndex = 0;
-        int finalIndex = numberOfListPerThread;
+            for (final List<LargeTable> slice : partitions) {
+                tasks.add(() -> {
+                    prepareRunnable(slice);
+                    return null;
+                });
+            }
 
-        final List<Runnable> runners = new ArrayList<>();
+            List<Future<Void>> futures = executorService.invokeAll(tasks);
 
-        for (int i = 0; i < numberOfProcessorsAvailable; i++) {
-            final List<LargeTable> sliced = largeTables.subList(startIndex, finalIndex);
-            runners.add(() -> prepareRunnable(sliced));
-            startIndex += numberOfListPerThread;
-            finalIndex += numberOfListPerThread;
+            for (final Future<Void> f : futures) {
+                try {
+                    f.get();
+                } catch (ExecutionException e) {
+                    LOGGER.severe("SQL Exception occurred: " + e.getMessage());
+                    throw new RuntimeException("Error while inserting data: ", e.getCause());
+                }
+            }
+        } catch (InterruptedException e) {
+            LOGGER.severe("SQL Exception occurred: " + e.getMessage());
+            throw new RuntimeException(e);
         }
-
-        final var executorService = Executors.newFixedThreadPool(numberOfProcessorsAvailable);
-        runners.forEach(executorService::execute);
-
-        executorService.shutdown();
     }
 
-    private static int getRoundedProcessorsAvailable(final List<?> list) {
-        var numberOfProcessorsAvailable = Runtime.getRuntime().availableProcessors();
+    private static List<List<LargeTable>> partitionList(final List<LargeTable> largeTables,
+                                                        final int partitions) {
+        final List<List<LargeTable>> result = new ArrayList<>();
+        int totalSize = largeTables.size();
+        int baseSize = totalSize / partitions;
+        int remainder = totalSize % partitions;
 
-        while (list.size() % numberOfProcessorsAvailable != 0) {
-            --numberOfProcessorsAvailable;
+        int start = 0;
+        for (int i = 0; i < partitions; i++) {
+            int chunkSize = baseSize + (remainder > 0 ? 1 : 0);
+            remainder = Math.max(0, remainder - 1);
+
+            int end = start + chunkSize;
+            end = Math.min(end, totalSize);
+
+            if (start >= end) {
+                break;
+            }
+
+            result.add(largeTables.subList(start, end));
+            start = end;
         }
 
-        return numberOfProcessorsAvailable;
+        return result;
     }
 
     private static void prepareRunnable(final List<LargeTable> largeTables) {
         try (final var connection = MySQLConnection.getConnection()) {
             prepare(largeTables, connection);
         } catch (final SQLException e) {
+            LOGGER.severe("SQL Exception occurred: " + e.getMessage());
             throw new RuntimeException(e);
         }
     }
@@ -101,6 +133,7 @@ public class AdvancedInsertService {
 
         for (final LargeTable aLargeTable : largeTables) {
             execute(aLargeTable, preparedStatement, count);
+            count++;
         }
 
         preparedStatement.executeBatch();
@@ -114,7 +147,7 @@ public class AdvancedInsertService {
         preparedStatement.setDate(2, Date.valueOf(LocalDate.from(aLargeTable.date())));
         preparedStatement.addBatch();
 
-        if (++count % 1000 == 0) {
+        if (count % CONFIGURED_BATCH_SIZE == 0) {
             preparedStatement.executeBatch();
         }
     }
