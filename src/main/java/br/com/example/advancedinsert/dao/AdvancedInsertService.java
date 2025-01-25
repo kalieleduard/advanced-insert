@@ -39,9 +39,9 @@ public class AdvancedInsertService {
             rs = preparedStatement.executeQuery();
 
             while (rs.next()) {
-                final var id = (UUID) rs.getObject("id");
+                final var id = rs.getString("id");
                 final var date = rs.getDate("date");
-                response.add(new LargeTable(id, date.toLocalDate()));
+                response.add(new LargeTable(UUID.fromString(id), date.toLocalDate()));
             }
         } catch (final SQLException e) {
             LOGGER.severe("SQL Exception occurred: " + e.getMessage());
