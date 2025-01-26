@@ -1,6 +1,6 @@
 package br.com.example.advancedinsert.dao;
 
-import br.com.example.advancedinsert.ListUtils;
+import br.com.example.advancedinsert.controller.ListUtils;
 import br.com.example.advancedinsert.dao.connections.MySQLConnection;
 import br.com.example.advancedinsert.dao.connections.PostgresConnection;
 import br.com.example.advancedinsert.dao.entity.LargeTable;

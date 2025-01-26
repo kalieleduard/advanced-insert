@@ -1,0 +1,15 @@
+spring:
+  jmx:
+    enabled: true
+management:
+  endpoints:
+    jmx:
+      exposure:
+        include: '*'
+    web:
+      exposure:
+        include: [ "prometheus" ]
+    enabled-by-default: true
+  metrics:
+    tags:
+      application: "${spring.application.name}"

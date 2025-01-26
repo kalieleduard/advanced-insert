@@ -1,4 +1,4 @@
-package br.com.example.advancedinsert;
+package br.com.example.advancedinsert.controller;
 
 import java.util.ArrayList;
 import java.util.List;
